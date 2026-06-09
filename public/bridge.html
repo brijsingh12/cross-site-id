@@ -3,102 +3,73 @@
 <head>
   <meta charset="utf-8">
   <title>Identity Bridge</title>
-  <!--
-    This page is loaded inside a hidden iframe from partner sites.
-    It uses the Storage Access API (Safari) to read/write our first-party
-    storage, enabling cross-site identity resolution without third-party cookies.
-  -->
 </head>
 <body>
 <script>
 (function () {
   'use strict';
 
-  var STORAGE_KEY = '__ntrx_uid';
-  var parentOrigin = null;
+  var KEY = '__ntrx_uid';
 
-  // ---- Storage helpers ----
-
-  function readId() {
-    try { return localStorage.getItem(STORAGE_KEY); } catch (e) { return null; }
+  function read() {
+    try { return localStorage.getItem(KEY); } catch (e) { return null; }
   }
 
-  function writeId(id) {
-    try { localStorage.setItem(STORAGE_KEY, id); } catch (e) {}
+  function write(id) {
+    try { localStorage.setItem(KEY, id); } catch (e) {}
   }
 
-  // ---- Message handler ----
-
-  function handleResolve(msg, source, origin) {
-    function respond(id) {
-      source.postMessage({ type: 'ntrx_response', id: id || null }, origin);
-    }
-
-    function doResolve() {
-      var storedId = readId();
-
-      if (storedId) {
-        // We have an ID in our storage — return it
-        // Also store the parent's ID if they had one (for merging)
-        respond(storedId);
-      } else if (msg.id) {
-        // Parent has an ID but we don't — adopt it
-        writeId(msg.id);
-        respond(msg.id);
-      } else {
-        // Neither side has an ID
-        respond(null);
-      }
-    }
-
-    // Try Storage Access API first (required by Safari for iframe storage access)
-    if (document.requestStorageAccess) {
-      // Check if we already have access
-      if (document.hasStorageAccess) {
-        document.hasStorageAccess().then(function (has) {
-          if (has) {
-            doResolve();
-          } else {
-            // Request access — this may silently fail without user gesture
-            document.requestStorageAccess().then(function () {
-              doResolve();
-            }).catch(function () {
-              // Storage access denied — we can't help
-              respond(null);
-            });
-          }
-        }).catch(function () {
-          respond(null);
-        });
-      } else {
-        document.requestStorageAccess().then(function () {
-          doResolve();
-        }).catch(function () {
-          respond(null);
-        });
-      }
+  /** Ensure we have storage access (Safari requires this for iframes). */
+  function withStorageAccess(fn) {
+    if (document.requestStorageAccess && document.hasStorageAccess) {
+      document.hasStorageAccess().then(function (has) {
+        if (has) { fn(); return; }
+        document.requestStorageAccess().then(fn).catch(function () { fn(); });
+      }).catch(function () { fn(); });
     } else {
-      // No Storage Access API (Chrome, Firefox) — try direct access
-      doResolve();
+      fn();
     }
   }
-
-  // ---- Listen for messages from parent ----
 
   window.addEventListener('message', function (e) {
     if (!e.data || !e.source) return;
+    var msg = e.data;
+    var origin = e.origin;
+    var source = e.source;
 
-    // Accept any origin (we serve many partner sites)
-    if (e.data.type === 'ntrx_resolve') {
-      parentOrigin = e.origin;
-      handleResolve(e.data, e.source, e.origin);
+    // --- RESOLVE: parent wants to READ our stored token ---
+    if (msg.type === 'ntrx_resolve') {
+      withStorageAccess(function () {
+        var stored = read();
+        if (stored) {
+          // We have a token — return it (cross-site link!)
+          source.postMessage({ type: 'ntrx_response', id: stored }, origin);
+        } else if (msg.id) {
+          // Parent has a token, we don't — adopt it for future cross-site use
+          write(msg.id);
+          source.postMessage({ type: 'ntrx_response', id: msg.id }, origin);
+        } else {
+          // Neither side has a token
+          source.postMessage({ type: 'ntrx_response', id: null }, origin);
+        }
+      });
+    }
+
+    // --- STORE: parent wants to WRITE a token into our storage ---
+    if (msg.type === 'ntrx_store' && msg.id) {
+      withStorageAccess(function () {
+        var existing = read();
+        if (!existing) {
+          // Only store if we don't already have one (first device wins)
+          write(msg.id);
+        }
+        source.postMessage({ type: 'ntrx_stored' }, origin);
+      });
     }
   });
 
-  // ---- Signal that the bridge is ready ----
-
+  // Signal ready
   if (window.parent !== window) {
-    // Use '*' because we don't know the parent's origin yet
     window.parent.postMessage({ type: 'ntrx_bridge_ready' }, '*');
   }
 })();
