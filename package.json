@@ -1,0 +1,20 @@
+{
+  "name": "cross-site-id",
+  "version": "2.0.0",
+  "description": "Cross-site user identity resolution without third-party cookies — tiered fingerprint matching + multi-anchor persistence",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "compression": "^1.7.4",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "helmet": "^7.1.0"
+  }
+}
