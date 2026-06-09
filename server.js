@@ -133,31 +133,75 @@ app.post('/api/register', function (req, res) {
   });
 });
 
-// ---- Bounce redirect (Safari fallback when iframe bridge fails) ----
+// ---- Bounce redirect (PRIMARY cross-site mechanism for Safari) ----
+//
+//  Safari flow:
+//    1. Client on shop.com has no local token
+//    2. Client redirects to: identity-server.com/bounce?r=shop.com/page
+//    3. During this redirect, identity-server.com IS first-party
+//    4. Server reads its HttpOnly cookie (_ntrx_sid)
+//       - Cookie exists → user visited another partner site before → SAME token
+//       - Cookie doesn't exist → new user → generate new token
+//    5. Server sets/refreshes HttpOnly cookie (400-day, NOT capped by ITP)
+//    6. Server redirects back to shop.com/page?_ntrx_tok=the-token
+//    7. Client reads token from URL, stores locally → done
+//
 app.get('/bounce', function (req, res) {
   var returnUrl = req.query.r;
   if (!returnUrl || !/^https?:\/\//.test(returnUrl)) {
     return res.status(400).send('Missing or invalid return URL');
   }
 
-  // Read or create token from our first-party cookie
+  // Read existing cookie OR create new token
   var id = req.cookies._ntrx_sid;
-  if (!id) {
+  var isNew = false;
+  if (!id || typeof id !== 'string' || !id.startsWith('ntrx_')) {
     id = 'ntrx_' + crypto.randomUUID();
+    isNew = true;
   }
 
-  // Set first-party cookie on OUR domain (we ARE first-party during bounce)
+  // Set first-party HttpOnly cookie on OUR domain
+  // This is NOT capped by Safari ITP because:
+  //   1. We are the first-party during this navigation
+  //   2. It's set via Set-Cookie header, not document.cookie
+  //   3. HttpOnly cookies are not subject to the 7-day JS cookie cap
   res.cookie('_ntrx_sid', id, {
-    maxAge:   400 * 24 * 60 * 60 * 1000,
+    maxAge:   400 * 24 * 60 * 60 * 1000, // 400 days
     httpOnly: true,
     secure:   true,
-    sameSite: 'lax'
+    sameSite: 'none'  // allow cross-site redirect flow
   });
 
-  registry.register(id, 'bounce');
+  registry.register(id, 'bounce:' + (isNew ? 'new' : 'existing'));
 
   var sep = returnUrl.indexOf('?') !== -1 ? '&' : '?';
   res.redirect(302, returnUrl + sep + '_ntrx_tok=' + encodeURIComponent(id));
+});
+
+// ---- Silent bounce-set (sets cookie without redirect, for background registration) ----
+//  Called via <img src="/bounce-set?t=token"> from the client after generating a new UUID.
+//  This ensures the server has the token in its cookie for future cross-site bounces.
+app.get('/bounce-set', function (req, res) {
+  var token = req.query.t;
+  var existing = req.cookies._ntrx_sid;
+
+  // If server already has a cookie, don't overwrite (first device wins)
+  var id = existing && existing.startsWith('ntrx_') ? existing : token;
+
+  if (id && id.startsWith('ntrx_')) {
+    res.cookie('_ntrx_sid', id, {
+      maxAge:   400 * 24 * 60 * 60 * 1000,
+      httpOnly: true,
+      secure:   true,
+      sameSite: 'none'
+    });
+    registry.register(id, 'bounce-set');
+  }
+
+  // Return a 1x1 transparent pixel
+  var pixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+  res.set({ 'Content-Type': 'image/gif', 'Cache-Control': 'no-store' });
+  res.send(pixel);
 });
 
 // ---- Test pages ----
@@ -177,7 +221,7 @@ registry.load();
 
 app.listen(PORT, function () {
   console.log('');
-  console.log('  Cross-Site Identity Server v3 (Token-Based)');
+  console.log('  Cross-Site Identity Server v4 (Safari-First)');
   console.log('  --------------------------------------------');
   console.log('  Port:    ' + PORT);
   console.log('  Script:  http://localhost:' + PORT + '/id-generator.js');
