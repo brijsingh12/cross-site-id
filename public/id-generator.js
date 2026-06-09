@@ -539,12 +539,24 @@
       };
 
       // Tiered hash computation
+      // CORE: only signals that NEVER change between page loads
+      //   - WebGL renderer/vendor = GPU hardware string (100% stable)
+      //   - Audio fingerprint     = audio stack constant (stable)
+      //   - Math constants        = JS engine specific (stable)
+      //   - Screen + hardware     = physical device props (stable)
+      // NOTE: canvas and WebGL render are EXCLUDED from core because
+      //   Safari ITP adds random noise to canvas/pixel output each load.
       var coreStr = stableJSON({
-        canvas:  canvas,
-        wglR:    webgl ? webgl.renderer : '',
-        wglV:    webgl ? webgl.vendor : '',
-        wglRH:   webgl ? webgl.renderHash : 0,
-        audio:   audioHash
+        wglR:  webgl ? webgl.renderer : '',
+        wglV:  webgl ? webgl.vendor : '',
+        audio: audioHash,
+        math:  math,
+        sw:    scr.w,
+        sh:    scr.h,
+        dpr:   scr.dpr,
+        hc:    nav.hc,
+        mtp:   nav.mtp,
+        plat:  nav.platform
       });
 
       var deviceStr = stableJSON({
@@ -557,7 +569,9 @@
         cd:  scr.cd,
         dpr: scr.dpr,
         tz:  tz.tz,
-        math: math
+        math: math,
+        lang: nav.lang,
+        vendor: nav.vendor
       });
 
       var fullStr = stableJSON(signals);
